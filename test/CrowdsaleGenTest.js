@@ -186,7 +186,7 @@ contract('LifCrowdsale Property-based test', function(accounts) {
 
   let runGeneratedCrowdsaleAndCommands = async function(input) {
     let blocksCount = 5;
-    let startBlock = web3.eth.blockNumber + 5;
+    let startBlock = web3.eth.blockNumber + 10;
     let endBlock = startBlock + blocksCount;
 
     help.debug("crowdsaleTestInput data:\n", input, startBlock, endBlock);
