@@ -55,13 +55,21 @@ contract('LifCrowdsale Property-based test', function(accounts) {
     type: jsc.constant("checkCrowdsale"),
     fromAccount: jsc.nat(accounts.length - 1)
   });
+  let addPresalePaymentCommandGen = jsc.record({
+    type: jsc.constant("addPresalePayment"),
+    account: jsc.nat(accounts.length - 1),
+    fromAccount: jsc.nat(accounts.length - 1),
+    amountEth: jsc.number(),
+    addFunding: jsc.bool // issue & transfer the necessary tokens for this payment?
+  });
 
   let commandsGen = jsc.nonshrink(jsc.oneof([
     waitBlockCommandGen,
     checkPriceCommandGen,
     submitBidCommandGen,
     setStatusCommandGen,
-    checkCrowdsaleCommandGen
+    checkCrowdsaleCommandGen,
+    addPresalePaymentCommandGen
   ]));
 
   let crowdsaleTestInputGen = jsc.record({
@@ -94,8 +102,15 @@ contract('LifCrowdsale Property-based test', function(accounts) {
       return false;
     } else if (command.type == "checkCrowdsale") {
       return state.status != 2 || web3.eth.blockNumber <= state.crowdsaleData.endBlock;
+    } else if (command.type == "addPresalePayment") {
+      return (command.fromAccount != 0) ||
+        (state.crowdsaleData.startPriceEth == 0) ||
+        !command.addFunding ||
+        (web3.eth.blockNumber >= state.crowdsaleData.startBlock) ||
+        (command.amountEth <= 0) ||
+        (state.crowdsaleData.presaleBonusRate <= 0);
     } else {
-      assert(false, "unknnow command " + command.type);
+      assert(false, "unknown command " + command.type);
     }
   }
 
@@ -116,12 +131,30 @@ contract('LifCrowdsale Property-based test', function(accounts) {
         let maxPriceDiff = 0.000000001;
         assert.equal(true, Math.abs(priceDiffPercent) <= maxPriceDiff,
           "price diff should be less than " + maxPriceDiff + " but it's " + priceDiffPercent);
-      }  else {
+      } else {
         assert.equal(expectedPrice, price,
           "expected price is different! Expected: " + expectedPrice + ", actual: " + price + ". blocks: " + web3.eth.blockNumber + ", start/end: " +
           state.crowdsaleData.startBlock + "/" + state.crowdsaleData.endBlock);
       }
 
+      return state;
+    } else if (command.type == "addPresalePayment") {
+      if (command.addFunding) {
+        let { minCap, presaleBonusRate, maxTokens } = state.crowdsaleData;
+        let minCapEth = web3.fromWei(minCap, 'ether');
+        let presaleMaxTokens = help.getPresalePaymentMaxTokens(minCapEth, maxTokens, presaleBonusRate, command.amountEth);
+
+        await token.issueTokens(Math.ceil(presaleMaxTokens));
+        let presaleMaxWei = Math.ceil(help.lif2LifWei(presaleMaxTokens));
+        await token.transferFrom(token.address, state.crowdsaleContract.address, presaleMaxWei, {from: accounts[0]});
+      }
+
+      await state.crowdsaleContract.addPresalePayment(
+        accounts[command.account],
+        web3.toWei(command.amountEth, 'ether'),
+        {from: accounts[command.fromAccount]}
+      );
+      state.presalePayments = _.concat(state.presalePayments, {amountEth: command.amountEth, account: command.account});
       return state;
     } else if (command.type == "submitBid") {
       let price = help.getCrowdsaleExpectedPrice(
@@ -134,7 +167,7 @@ contract('LifCrowdsale Property-based test', function(accounts) {
         value: weiCost,
         from: account
       });
-      state.bids = _.concat(state.bids || [], {tokens: command.tokens, price: price, account: account});
+      state.bids = _.concat(state.bids, {tokens: command.tokens, price: price, account: account});
       state.weiRaised += weiCost;
       return state;
     } else if (command.type == "setStatus") {
@@ -196,6 +229,7 @@ contract('LifCrowdsale Property-based test', function(accounts) {
         crowdsaleData: crowdsaleData,
         crowdsaleContract: crowdsale,
         bids: [],
+        presalePayments: [],
         weiRaised: 0,
         status: 1 // crowdsale status
       };
@@ -273,6 +307,32 @@ contract('LifCrowdsale Property-based test', function(accounts) {
         startPriceEth: 16, changePerBlock: 37, changePriceEth: 45,
         minCapEth: 23, maxCapEth: 32, maxTokens: 40,
         presaleBonusRate: 23, ownerPercentage: 27
+      }
+    };
+
+    await runGeneratedCrowdsaleAndCommands(crowdsaleAndCommands);
+  });
+
+  it("runs a test with a presale Payment that should be accepted", async function() {
+    let crowdsaleAndCommands = {
+      commands: [
+        {
+          type: 'addPresalePayment',
+          account: 1,
+          fromAccount: 0,
+          addFunding: true,
+          amountEth: 11 },
+        { type: 'waitBlock' }
+      ],
+      crowdsale: {
+        startPriceEth: 5,
+        changePerBlock: 8,
+        changePriceEth: 1,
+        minCapEth: 4,
+        maxCapEth: 12,
+        maxTokens: 5,
+        presaleBonusRate: 8,
+        ownerPercentage: 12
       }
     };
 
